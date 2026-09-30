@@ -389,6 +389,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### 5.1 Running the tests
+
+[`test_eight_ball.py`](test_eight_ball.py) codifies every check used to
+verify the math in this README while building it: the ancilla-ladder
+`multi_controlled_x()` against its full truth table (for every input
+where the ancillas correctly start at `|0⟩`), the multi-controlled-Z
+phase flip against the exact expected unitary diagonal, `optimal_iterations()`
+against known values, `get_answers()`'s backward-compatible ordering
+and padding, and — as a statistical check with a tolerance band, since
+these are real measurement outcomes — the full oracle+diffuser circuit's
+success probability against §3.6's `sin²((2r+1)θ)` formula at several
+`--qubits` values, plus the exact under/optimal/overshoot table from
+§3.6. Runs entirely on the local simulator; no AWS credentials needed.
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## 6. Running locally (no AWS account needed)
 
 ```bash

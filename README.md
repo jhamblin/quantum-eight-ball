@@ -4,7 +4,9 @@ A Magic 8-Ball, but the "magic" is Grover's search algorithm running on
 AWS Braket. Ask a question, shake the ball, and a genuinely quantum
 process picks and then reveals your answer. Runs identically against
 Braket's free local simulator or a managed AWS simulator/QPU — same
-circuits, same code, just a different `--device` flag.
+circuits, same code, just a different `--device` flag. The number of
+qubits (and therefore the number of possible answers) is a `--qubits`
+flag, defaulting to 3 (8 answers).
 
 This is a companion project to a [Bell-state "hello world"](../bell)
 for Braket; that one introduces qubits, kets, and gates from scratch.
@@ -19,23 +21,28 @@ already hidden inside the ball before you look — you're not causing
 the answer to exist, you're revealing one that was already fixed the
 moment the die settled.
 
-This program mirrors that two-step structure exactly, using 8 possible
-answers instead of 20 (so the state fits in `2³ = 8` basis states —
-one satisfying reason "eight ball" and "3 qubits" go well together):
+This program mirrors that two-step structure, using `n` qubits and
+`2ⁿ` possible answers (`--qubits n`, default `n=3` — 8 answers, one
+satisfying reason "eight ball" and "3 qubits" go well together, and
+the smallest circuit that still does real Grover amplification):
 
-1. **Shake.** A quantum coin-flip circuit (`H` on each of 3 qubits,
-   then measure) picks one of the 8 answers uniformly at random. This
-   is the die settling — a real physical random process, not a
+1. **Shake.** A quantum coin-flip circuit (`H` on each of `n` qubits,
+   then measure) picks one of the `2ⁿ` answers uniformly at random.
+   This is the die settling — a real physical random process, not a
    pseudorandom number generator.
-2. **Reveal.** **Grover's algorithm** is used to search the 8
+2. **Reveal.** **Grover's algorithm** is used to search the `2ⁿ`
    possibilities for that specific hidden answer, amplifying its
-   measurement probability from an unhelpful `1/8 = 12.5%` up to
-   roughly `94%`, so that measuring the circuit reveals it.
+   measurement probability from an unhelpful `1/2ⁿ` up to nearly 100%
+   (the exact figure depends on `n` — see §3.6), so that measuring the
+   circuit reveals it.
 
 Step 2 is the actual point of this project: it's a small, concrete,
 verifiable demonstration of Grover's algorithm, using the hidden
 answer from step 1 as the "needle" Grover has to find in the
-"haystack" of 8 possibilities.
+"haystack" of `2ⁿ` possibilities. Turning up `--qubits` doesn't change
+what the program does, just how big a haystack Grover has to search —
+it's a good way to see the algorithm's behavior (iteration count,
+success probability, circuit size) scale with `N`.
 
 ## 2. Quantum basics, quickly
 
@@ -68,7 +75,8 @@ whichever 3-bit string you measure as the hidden answer's index.
 
 ### 3.1 The problem it solves
 
-You have `N` items (here `N=8`, indexed by 3-bit strings) and a
+You have `N` items (here `N=2ⁿ`, indexed by `n`-bit strings — `N=8`
+with the default `--qubits 3`) and a
 **black-box oracle** that can tell you whether a given item is "the
 marked one" `w` — but you can't just peek at `w` directly, only query
 the oracle. Classically, finding `w` by querying one item at a time
@@ -78,8 +86,8 @@ speedup that's also *provably optimal* (no quantum algorithm can do
 better than `Θ(√N)` for this problem).
 
 In this program, "the marked item" is the hidden answer chosen by the
-shake step, and the oracle is built from that specific 3-bit string —
-see §3.3. This is a slightly artificial setup (the code technically
+shake step, and the oracle is built from that specific `n`-bit string
+— see §3.3. This is a slightly artificial setup (the code technically
 "knows" `w` in order to build the oracle), but it's the standard way
 to demonstrate and test a Grover implementation: build an oracle for a
 *known* target, then verify Grover actually finds it.
@@ -95,7 +103,7 @@ to demonstrate and test a Grover implementation: build an oracle for a
 ```
 
 Each `(oracle, diffuser)` pair is called a **Grover iteration**. `r`
-is chosen based on `N` (see §3.4) — too few iterations undershoots,
+is chosen based on `N` (see §3.6) — too few iterations undershoots,
 too many overshoots, because the amplitude on `|w⟩` doesn't increase
 monotonically forever; it oscillates.
 
@@ -110,7 +118,7 @@ Uf = I - 2|w⟩⟨w|
 which does `Uf|w⟩ = -|w⟩` and `Uf|x⟩ = |x⟩` for every `x ≠ w`. Note
 what this *doesn't* do: it doesn't change any measurement probability
 by itself (`|-1|² = |1|² = 1`) — a flipped sign is invisible if you
-measured right away. It only matters once the diffuser (§3.4) uses
+measured right away. It only matters once the diffuser (§3.5) uses
 that sign difference to move amplitude around.
 
 **Building it from gates**, for a concrete example target `w = 101`:
@@ -140,11 +148,53 @@ gates turns its controlled-`X` into a controlled-`Z`:
 CCZ(q0,q1,q2) = H(q2) · CCNOT(q0,q1,q2) · H(q2)
 ```
 
-This is the `ccz()` helper function in `eight_ball.py`, and it's the
-only 3-qubit gate the whole program needs (both the oracle and the
-diffuser below are built from it).
+This is the 3-qubit case; §3.4 generalizes it to any `n`.
 
-### 3.4 The diffuser: inversion about the mean
+### 3.4 Generalizing beyond 3 qubits: multi-controlled-Z with ancillas
+
+The `n=3` oracle needed one 3-qubit gate, CCZ, built from Braket's
+built-in 3-qubit Toffoli. For `n` qubits, the same construction needs
+an `n`-qubit multi-controlled-Z (flip the sign of `|1...1⟩` across all
+`n` qubits) — and there's no larger built-in Toffoli to lean on.
+Braket only ever gives you 1- and 2-control gates natively
+(`cnot`/`cz` and `ccnot`), on simulators and real devices alike, so
+anything with more controls has to be *decomposed* into those.
+
+**The trick: an ancilla "ladder."** An `n`-qubit multi-controlled-Z is
+just an `(n-1)`-control, 1-target multi-controlled-**X** (call the
+number of controls `k = n-1`), sandwiched by `H` on the target — the
+same `Z = H·X·H` identity as before. For `k ≤ 2` controls, that's a
+plain `CNOT`/`CCNOT`, exactly §3.3's case. For `k > 2`, borrow `k-2`
+extra **ancilla qubits** (starting and ending at `|0⟩`) and AND the
+controls together two at a time, chaining through the ancillas with
+ordinary Toffolis:
+
+```
+Toffoli(control₀, control₁  -> ancilla₀)          ancilla₀ = c₀ ∧ c₁
+Toffoli(control₂, ancilla₀  -> ancilla₁)          ancilla₁ = c₀ ∧ c₁ ∧ c₂
+   ...
+Toffoli(controlₖ₋₁, ancillaₖ₋₃ -> target)         target ⊕= AND of all k controls
+```
+
+Then run the *same* Toffolis again, in reverse, skipping only the last
+one — Toffoli gates are their own inverse, so this "uncomputes" every
+ancilla back to `|0⟩` without touching `target`, leaving the ancillas
+clean for the next time this oracle or diffuser runs. The result:
+`target` flips iff every control was `|1⟩`, using only 2-control
+gates throughout, so this still runs on real hardware, not just
+simulators — it's just a bigger circuit. This ladder needs
+`max(0, k-2)` ancilla qubits for `k` controls; since the oracle/diffuser
+here always have `k = n-1` controls, that's `max(0, n-3)` ancillas
+total (`0` for `n≤3`, matching §3.3 exactly — `n=4` needs 1, `n=5`
+needs 2, and the `n=8` case needs 5, for 13 qubits total).
+
+`multi_controlled_x()` in `eight_ball.py` implements exactly this
+ladder, and `phase_flip_all_ones()` wraps it with the `H`-sandwich to
+turn it into the multi-controlled-Z that both `oracle()` and
+`diffuser()` are built from — for any `n`, including `n=3` (where it
+collapses back to the plain CCZ of §3.3, with zero ancillas).
+
+### 3.5 The diffuser: inversion about the mean
 
 The diffuser is:
 
@@ -204,9 +254,9 @@ Check normalization: `7×(0.1768)² + (0.8839)² ≈ 0.2188 + 0.7813 ≈
 1.000` ✓. The probability of measuring `w` after this single
 iteration is `(0.8839)² ≈ 78.1%` — up from the `1/8 = 12.5%` you
 started with, after just one oracle+diffuser pair. A second iteration
-pushes it higher still (§3.5).
+pushes it higher still (§3.6).
 
-### 3.5 How many iterations, and how likely is success?
+### 3.6 How many iterations, and how likely is success?
 
 **Geometric picture.** Split the state space into `|w⟩` and `|s'⟩`
 (the equal superposition of the other `N-1` states). The initial
@@ -254,25 +304,59 @@ past a target angle. `--iterations 0` and `--iterations 3` in
 `eight_ball.py` are there specifically so you can reproduce the
 under/over-amplified rows above yourself.
 
+**Scaling with `--qubits`.** Bigger `N` means a smaller starting angle
+`θ`, so it takes more iterations to rotate up to `π/2` — but also lands
+closer to it, since `r` is a discrete number of `2θ`-sized steps trying
+to hit a continuous target. Both effects are visible in practice
+(`optimal_iterations()`'s predictions vs. what `eight_ball.py` actually
+measured, each run at the optimal `r`):
+
+| `--qubits` | `N` | ancillas needed | optimal `r` | predicted `P(r)` | measured |
+|---|---|---|---|---|---|
+| 3 (default) | 8 | 0 | 2 | 94.6% | 93.8%–94.2% |
+| 4 | 16 | 1 | 3 | 96.2% | 95.5% |
+| 5 | 32 | 2 | 4 | 99.9% | 99.9% |
+| 8 | 256 | 5 | 12 | ~99.99% | 100.0% (1000/1000) |
+
+so larger `--qubits` values don't just search a bigger haystack, they
+generally find the answer *more* reliably too, at the cost of a much
+larger circuit (§3.4's ancilla ladder, and more Grover iterations).
+
 ## 4. The code
 
-[`eight_ball.py`](eight_ball.py) implements every piece above:
+[`eight_ball.py`](eight_ball.py) implements every piece above, for any
+`--qubits n`:
 
-- `shake(device)` — the `H⊗3` + 1-shot-measurement "coin flip" from
-  §2, picking the hidden answer.
-- `oracle(target_bits)` — §3.3's `X`-sandwiched `CCZ`, built for
-  whichever 3-bit string `shake()` returned.
-- `diffuser()` — §3.4's `H`/`X`-sandwiched `CCZ` (target `000`).
-- `ccz(circuit, q0, q1, q2)` — the `H·CCNOT·H` identity both of the
-  above are built from.
-- `optimal_iterations(n_items)` — §3.5's `round(π/(4θ) - 1/2)`.
-- `build_grover_circuit(target_bits, iterations)` — `H⊗3` once, then
-  `oracle` + `diffuser` repeated `iterations` times.
-- `main()` — ties it together: shake, build and run the Grover
-  circuit, print the full measurement histogram, and report the
-  most-measured answer plus how often it matched the hidden one.
+- `shake(device, qubits)` — the `H⊗n` + 1-shot-measurement "coin flip"
+  from §2, picking the hidden answer.
+- `multi_controlled_x(circuit, controls, target, ancillas)` — §3.4's
+  ancilla ladder: a plain `CNOT`/`CCNOT` for ≤2 controls, the AND-chain
+  construction for more.
+- `phase_flip_all_ones(circuit, qubits, ancillas)` — the `H`-sandwich
+  around `multi_controlled_x` that turns it into a multi-controlled-Z;
+  this is the one piece both the oracle and the diffuser are built
+  from (it's what `ccz` was in the fixed-3-qubit version).
+- `oracle(target_bits, qubits, ancillas)` — §3.3's `X`-sandwiched
+  phase flip, built for whichever `n`-bit string `shake()` returned.
+- `diffuser(qubits, ancillas)` — §3.5's `H`/`X`-sandwiched phase flip
+  (target `0...0`).
+- `optimal_iterations(n_items)` — §3.6's `round(π/(4θ) - 1/2)`.
+- `ancilla_count(n_controls)` — §3.4's `max(0, n_controls - 2)`.
+- `build_grover_circuit(target_bits, iterations, qubits, ancillas)` —
+  `H⊗n` once, then `oracle` + `diffuser` repeated `iterations` times.
+- `get_answers(n_qubits)` — returns exactly `2ⁿ` answer strings (see
+  below).
+- `main()` — ties it together: work out how many ancillas `--qubits`
+  needs, shake, build and run the Grover circuit, strip the ancilla
+  bits back off each measured bitstring, print the full histogram, and
+  report the most-measured answer plus how often it matched the hidden
+  one.
 
-The 8 answers and their 3-bit indices (`ANSWERS` in `eight_ball.py`):
+**The answers.** `CURATED_ANSWERS` in `eight_ball.py` is a hand-written
+list of 32 Magic-8-Ball-style phrases — enough to fully cover
+`--qubits` up to 5 (`2⁵=32`). `get_answers(n_qubits)` returns the first
+`2ⁿ` of those; the default `--qubits 3` uses exactly the first 8, in
+this order:
 
 | index | bits | answer |
 |---|---|---|
@@ -284,6 +368,12 @@ The 8 answers and their 3-bit indices (`ANSWERS` in `eight_ball.py`):
 | 5 | `101` | Don't count on it |
 | 6 | `110` | My sources say no |
 | 7 | `111` | Outlook not so good |
+
+Past 5 qubits (more than 32 answers needed) there's no more curated
+flavor text, so `get_answers()` pads with generic placeholders like
+`"Response #99 (uncharted qubit state)"` — the point past `--qubits 5`
+is watching Grover's behavior scale (§3.6's table), not reading
+clever phrases.
 
 Note that your question's text has no effect on the physics — exactly
 like a real 8-ball, the answer comes from the shake, not from what you
@@ -305,31 +395,47 @@ pip install -r requirements.txt
 python eight_ball.py "Will this project work?"
 ```
 
-This uses Braket's built-in local simulator (no credentials, no cost)
-and the default (optimal, `r=2`) number of Grover iterations, over
-1000 shots so you can see the full amplified distribution, e.g.:
+This uses Braket's built-in local simulator (no credentials, no cost),
+the default `--qubits 3` (8 answers), and the default (optimal, `r=2`)
+number of Grover iterations, over 1000 shots so you can see the full
+amplified distribution, e.g.:
 
 ```
 🎱 You asked: "Will this project work?"
 
-Shaking the ball (quantum coin-flip picks a hidden answer)...
-Hidden answer: 101 -> "Don't count on it" (kept secret until revealed below)
+Shaking the ball (3-qubit coin-flip picks 1 of 8 hidden answers)...
+Hidden answer: 010 -> "You may rely on it" (kept secret until revealed below)
+
+Grover circuit (3 answer qubits = 3 total, 2 iteration(s)):
+[... circuit diagram ...]
 
 Running 1000 shot(s) on <LocalSimulator>...
 
 Measurement counts:
-  000: 5
-  001: 9
-  010: 8
-  011: 7
-  100: 9
-  101: 938  <- hidden answer
-  110: 16
-  111: 8
+  000: 7
+  001: 3
+  010: 942  <- hidden answer
+  011: 9
+  100: 10
+  101: 13
+  110: 9
+  111: 7
 
-🎱 The ball reveals: "Don't count on it"
-(hidden answer measured 938/1000 = 93.8% of shots)
+🎱 The ball reveals: "You may rely on it"
+(hidden answer measured 942/1000 = 94.2% of shots)
 ```
+
+Try a bigger search space with `--qubits`, e.g. `--qubits 8` (256
+answers, 12 Grover iterations, 5 ancilla qubits — see §3.6's table):
+
+```bash
+python eight_ball.py --qubits 8
+```
+
+The circuit diagram is only printed for small circuits (5 qubits or
+fewer); larger ones just report how many qubits and layers deep the
+circuit is, since a 13-qubit, 300+ layer diagram isn't legible in a
+terminal anyway.
 
 For a single, traditional "just give me one answer" reading:
 
@@ -338,7 +444,7 @@ python eight_ball.py --shots 1
 ```
 
 To see the unamplified baseline or an overshot distribution from
-§3.5's table:
+§3.6's table:
 
 ```bash
 python eight_ball.py --iterations 0   # ~12.5% each, uniformly random
@@ -382,18 +488,30 @@ list](https://console.aws.amazon.com/braket/home#/devices) for
 currently available QPU ARNs, regions, and pricing — **QPU tasks cost
 real money per shot, billed even for a small `--shots` count.** Real
 hardware is noisy, so expect the hidden answer's share of measurements
-to land somewhat below the ~94.6% noiseless prediction, and the other
-7 outcomes to be a bit more than perfectly flat — that's physical gate
-and readout error, not a bug in the circuit.
+to land somewhat below the noiseless prediction in §3.6's table, and
+the other outcomes to be a bit more than perfectly flat — that's
+physical gate and readout error, not a bug in the circuit. This gets
+worse as `--qubits` grows: more qubits means more Grover iterations
+(§3.6) *and* more ancilla-ladder gates per iteration (§3.4), so the
+circuit gets substantially deeper — `--qubits 8` is 12 iterations over
+13 qubits, hundreds of gates deep, which will be considerably noisier
+on today's hardware than `--qubits 3`'s much shorter circuit. Small
+`--qubits` values are the realistic choice for an actual QPU run;
+larger ones are best explored on the local simulator or SV1/DM1/TN1.
 
 ## 8. Extending this
 
-The real toy has 20 answers, not 8. Doing that properly would need
-`n=5` qubits (`2⁵=32` states, since 20 isn't a power of 2), assigning
-20 of the 32 basis states to real answers and treating the other 12 as
-invalid outcomes to re-shake on, and a multi-marked-item oracle (the
-"shake" step would need to reject invalid draws and retry, since it's
-no longer uniform over exactly the valid answers). The Grover math for
-multiple marked items `M` is a straightforward generalization of §3.5:
-`sin(θ) = √(M/N)` instead of `√(1/N)`, with the same rotation and
-iteration-count reasoning otherwise unchanged.
+The real toy has 20 answers, not a power of 2. Everything in this
+repo generalizes cleanly to `2ⁿ` answers for any `n` (that's the whole
+point of `--qubits`), but 20 isn't `2ⁿ` for any integer `n` — the
+nearest fit is `n=5` (32 states), which would need 12 of those 32
+basis states marked "invalid" and the shake step to reject and re-draw
+until it lands on one of the 20 real ones. The oracle would also need
+to become a **multi-marked-item** oracle (flip the sign of all 20 valid
+states, not just 1), which is a small change to §3.3's construction:
+apply `X` to map each valid target individually and flip its sign, or
+equivalently build a phase oracle straight from a lookup table of
+valid/invalid rather than a single bitstring comparison. The rest of
+the Grover math is a straightforward generalization of §3.6:
+`sin(θ) = √(M/N)` instead of `√(1/N)` for `M` marked items, with the
+same rotation and iteration-count reasoning otherwise unchanged.

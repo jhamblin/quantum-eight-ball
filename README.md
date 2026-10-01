@@ -334,6 +334,9 @@ larger circuit (§3.4's ancilla ladder, and more Grover iterations).
   task with too few shots — see §7.3.
 - `build_shake_circuit(qubits)` — the `H⊗n` circuit `shake()` runs,
   factored out so `main()` can print it before running.
+- `wait_for_result(task)` — waits for a submitted task's result,
+  printing its ID first and cancelling it on AWS if interrupted; both
+  `shake()` and the main Grover run go through this — see §7.3.
 - `multi_controlled_x(circuit, controls, target, ancillas)` — §3.4's
   ancilla ladder: a plain `CNOT`/`CCNOT` for ≤2 controls, the AND-chain
   construction for more.
@@ -505,7 +508,7 @@ inexpensive but not free.
 ### 7.3 Real quantum hardware (QPU)
 
 ```bash
-python eight_ball.py --device qpu --qpu-arn "arn:aws:braket:us-east-1::device/qpu/ionq/Aria-1" --shots 100
+python eight_ball.py --device qpu --qpu-arn "arn:aws:braket:us-east-1::device/qpu/ionq/Forte-1" --shots 100
 ```
 
 Check the [Braket console device
@@ -531,6 +534,22 @@ circuit gets substantially deeper — `--qubits 8` is 12 iterations over
 on today's hardware than `--qubits 3`'s much shorter circuit. Small
 `--qubits` values are the realistic choice for an actual QPU run;
 larger ones are best explored on the local simulator or SV1/DM1/TN1.
+QPU devices are also shared, on-demand infrastructure with limited
+daily availability windows, so a real-hardware run can sit queued for
+a while before either task actually executes — that queueing, not the
+circuit, is almost always what makes a QPU run feel slow.
+
+**Interrupting a run (Ctrl-C):** both the shake and Grover tasks print
+their task ID (the full ARN, on AWS) before waiting for a result, and
+`wait_for_result()` cancels whichever one is in flight if you
+interrupt the wait. Ctrl-C only stops *this local script* from
+waiting — without the explicit cancel, the task would keep running
+(and billing) on AWS regardless — and even then, AWS cancels QPU tasks
+on a **best-effort** basis, so a task that's already started actually
+running may complete (and be billed) anyway. The printed task ID is
+also useful on its own: if you lose the terminal, you can still look
+that task up in the Braket console or cancel it manually with
+`aws braket cancel-quantum-task --quantum-task-arn <id>`.
 
 ## 8. Extending this
 

@@ -160,6 +160,8 @@ def test_shake_submits_the_requested_shot_count():
         measurements = np.array([[1, 0, 1]])
 
     class FakeTask:
+        id = "fake-task-id"
+
         def result(self):
             return FakeResult()
 
@@ -175,6 +177,42 @@ def test_shake_submits_the_requested_shot_count():
     bits = eb.shake(device, [0, 1, 2], shots=150)
     assert device.last_shots == 150
     assert bits == "101"
+
+
+# --- wait_for_result: Ctrl-C handling ---------------------------------------
+
+
+def test_wait_for_result_cancels_task_on_keyboard_interrupt():
+    """Regression test: device.run(...).result() used to be called directly,
+    so Ctrl-C only killed the local process -- the submitted task kept
+    running (and billing) on AWS with no way to even find it again. Now
+    the task ID is printed up front and a KeyboardInterrupt during
+    .result() triggers task.cancel()."""
+
+    class FakeTask:
+        id = "arn:aws:braket:us-west-2:123:quantum-task/fake"
+        cancel_called = False
+
+        def result(self):
+            raise KeyboardInterrupt
+
+        def cancel(self):
+            self.cancel_called = True
+
+    task = FakeTask()
+    with pytest.raises(SystemExit):
+        eb.wait_for_result(task)
+    assert task.cancel_called
+
+
+def test_wait_for_result_returns_normally_without_interrupt():
+    class FakeTask:
+        id = "fake-id"
+
+        def result(self):
+            return "the result"
+
+    assert eb.wait_for_result(FakeTask()) == "the result"
 
 
 # --- get_device ------------------------------------------------------------

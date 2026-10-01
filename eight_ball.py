@@ -105,6 +105,37 @@ def get_device(name: str, qpu_arn: Optional[str]):
     return AwsDevice(MANAGED_SIMULATORS[name])
 
 
+def wait_for_result(task):
+    """Wait for a submitted quantum task's result, printing its ID so it
+    can be found or cancelled manually (e.g. via the Braket console or
+    `aws braket cancel-quantum-task`) even if this script is interrupted.
+
+    Ctrl-C only stops this local process from waiting -- the task keeps
+    running on AWS regardless. On KeyboardInterrupt, this requests
+    cancellation of the task itself, but AWS cancels QPU tasks on a
+    best-effort basis: once a task has started actually running on the
+    device (as opposed to still queued), cancellation can fail and the
+    task -- and its cost -- completes anyway. This project submits two
+    separate tasks per run (the shake, then the Grover circuit); an
+    interrupt only cancels whichever one is in flight at the time.
+    """
+    print(f"Task ID: {task.id}")
+    try:
+        return task.result()
+    except KeyboardInterrupt:
+        print("\nInterrupted -- requesting cancellation on AWS...")
+        try:
+            task.cancel()
+            print(
+                f"Cancellation requested for {task.id}. If the task had "
+                "already started running, it may complete (and be billed) "
+                "anyway -- check its status in the Braket console."
+            )
+        except Exception as e:
+            print(f"Could not cancel: {e}")
+        raise SystemExit(1)
+
+
 def optimal_iterations(n_items: int, n_marked: int = 1) -> int:
     """round(pi/4 * sqrt(N/M) - 1/2); see README section 3.5."""
     theta = math.asin(math.sqrt(n_marked / n_items))
@@ -235,7 +266,7 @@ def shake(device, qubits: List[int], shots: int = 1) -> str:
     chosen for.
     """
     circuit = build_shake_circuit(qubits)
-    result = device.run(circuit, shots=shots).result()
+    result = wait_for_result(device.run(circuit, shots=shots))
     return "".join(str(bit) for bit in result.measurements[0])
 
 
@@ -324,7 +355,7 @@ def main() -> None:
         )
 
     print(f"\nRunning {args.shots} shot(s) on {device}...")
-    result = device.run(circuit, shots=args.shots).result()
+    result = wait_for_result(device.run(circuit, shots=args.shots))
     full_counts = result.measurement_counts
 
     # Collapse out the ancilla bits (should always read 0 -- see README);

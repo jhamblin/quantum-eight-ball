@@ -223,11 +223,20 @@ def build_shake_circuit(qubits: List[int]) -> Circuit:
     return circuit
 
 
-def shake(device, qubits: List[int]) -> str:
-    """Quantum coin-flip: uniform superposition + one measurement."""
+def shake(device, qubits: List[int], shots: int = 1) -> str:
+    """Quantum coin-flip: uniform superposition + a single measurement.
+
+    Only one shot's worth of randomness is actually used -- the first
+    row of `measurements` -- but `shots` can be set higher than 1
+    because some real QPUs enforce a per-task minimum shot count well
+    above 1 (e.g. IonQ Forte-1 requires at least 100); main() passes
+    the same --shots value already chosen for the Grover circuit, so
+    this submits a task valid on whatever device that count was
+    chosen for.
+    """
     circuit = build_shake_circuit(qubits)
-    result = device.run(circuit, shots=1).result()
-    return next(iter(result.measurement_counts))
+    result = device.run(circuit, shots=shots).result()
+    return "".join(str(bit) for bit in result.measurements[0])
 
 
 def main() -> None:
@@ -289,7 +298,7 @@ def main() -> None:
         f"{n_answers} hidden answers)..."
     )
     print(build_shake_circuit(main_qubits))
-    target_bits = shake(device, main_qubits)
+    target_bits = shake(device, main_qubits, shots=args.shots)
     target_index = int(target_bits, 2)
     print(
         f'Hidden answer: {target_bits} -> "{answers[target_index]}" '

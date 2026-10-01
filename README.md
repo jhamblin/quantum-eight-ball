@@ -327,8 +327,13 @@ larger circuit (§3.4's ancilla ladder, and more Grover iterations).
 [`eight_ball.py`](eight_ball.py) implements every piece above, for any
 `--qubits n`:
 
-- `shake(device, qubits)` — the `H⊗n` + 1-shot-measurement "coin flip"
-  from §2, picking the hidden answer.
+- `shake(device, qubits, shots)` — the `H⊗n` + measurement "coin flip"
+  from §2, picking the hidden answer. Only the first shot's result is
+  used; `shots` can still be set above 1 (`main()` passes the same
+  count used for the Grover circuit) since some real QPUs reject a
+  task with too few shots — see §7.3.
+- `build_shake_circuit(qubits)` — the `H⊗n` circuit `shake()` runs,
+  factored out so `main()` can print it before running.
 - `multi_controlled_x(circuit, controls, target, ancillas)` — §3.4's
   ancilla ladder: a plain `CNOT`/`CCNOT` for ≤2 controls, the AND-chain
   construction for more.
@@ -506,7 +511,15 @@ python eight_ball.py --device qpu --qpu-arn "arn:aws:braket:us-east-1::device/qp
 Check the [Braket console device
 list](https://console.aws.amazon.com/braket/home#/devices) for
 currently available QPU ARNs, regions, and pricing — **QPU tasks cost
-real money per shot, billed even for a small `--shots` count.** Real
+real money per shot, billed even for a small `--shots` count.** Many
+QPUs also enforce a **minimum shot count per task** well above 1 —
+IonQ Forte-1, for example, requires at least 100 — so `--shots` can't
+be set arbitrarily low on real hardware the way it can on a simulator;
+the error names the actual minimum/maximum if you pick a value outside
+it. (The "shake" step submits its own single-measurement task too —
+see §4's `shake()` — and reuses whatever `--shots` you pass so that
+task clears the same per-device minimum, even though it only reads one
+shot's result for the hidden answer.) Real
 hardware is noisy, so expect the hidden answer's share of measurements
 to land somewhat below the noiseless prediction in §3.6's table, and
 the other outcomes to be a bit more than perfectly flat — that's

@@ -151,6 +151,32 @@ def test_shake_returns_a_valid_bitstring(n_qubits):
         assert set(bits) <= {"0", "1"}
 
 
+def test_shake_submits_the_requested_shot_count():
+    """Regression test: shake() used to always submit shots=1 regardless of
+    the `shots` argument, which fails on real QPUs that enforce a per-task
+    minimum shot count above 1 (e.g. IonQ Forte-1 requires >= 100)."""
+
+    class FakeResult:
+        measurements = np.array([[1, 0, 1]])
+
+    class FakeTask:
+        def result(self):
+            return FakeResult()
+
+    class FakeDevice:
+        def __init__(self):
+            self.last_shots = None
+
+        def run(self, circuit, shots):
+            self.last_shots = shots
+            return FakeTask()
+
+    device = FakeDevice()
+    bits = eb.shake(device, [0, 1, 2], shots=150)
+    assert device.last_shots == 150
+    assert bits == "101"
+
+
 # --- get_device ------------------------------------------------------------
 
 

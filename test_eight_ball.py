@@ -12,7 +12,6 @@ check against Grover's theoretical success-probability formula from
 README.md section 3.6 -- the full oracle+diffuser circuit end to end.
 """
 
-import json
 import math
 import os
 import subprocess
@@ -138,80 +137,6 @@ def test_get_answers_pads_beyond_the_curated_list():
     assert len(answers) == 64
     assert answers[:32] == eb.CURATED_ANSWERS
     assert all("uncharted" in a for a in answers[32:])
-
-
-# --- GenAI answer generation (--genai), §4.1 ------------------------------
-
-
-def test_extract_json_array_plain():
-    assert eb._extract_json_array('["a", "b"]') == ["a", "b"]
-
-
-def test_extract_json_array_with_prose_and_fences():
-    text = 'Sure, here you go:\n```json\n["x", "y", "z"]\n```\nHope that helps!'
-    assert eb._extract_json_array(text) == ["x", "y", "z"]
-
-
-def test_extract_json_array_missing_raises():
-    with pytest.raises(SystemExit):
-        eb._extract_json_array("no array here")
-
-
-def test_generate_genai_answers_caches_and_reuses(tmp_path, monkeypatch):
-    """Mocks the Bedrock client -- no AWS credentials needed -- to check the
-    caching behavior: one API call for a fresh request, zero for a repeat."""
-    anthropic = pytest.importorskip("anthropic")
-    monkeypatch.setattr(eb, "GENAI_CACHE_PATH", str(tmp_path / "cache.json"))
-
-    calls = []
-
-    class FakeTextBlock:
-        def __init__(self, text):
-            self.type = "text"
-            self.text = text
-
-    class FakeResponse:
-        def __init__(self, answers):
-            self.content = [FakeTextBlock(json.dumps(answers))]
-
-    class FakeMessages:
-        def create(self, model, max_tokens, messages):
-            calls.append(messages[0]["content"])
-            return FakeResponse([f"fake answer {len(calls)}-{i}" for i in range(3)])
-
-    class FakeClient:
-        def __init__(self, aws_region=None):
-            self.messages = FakeMessages()
-
-    monkeypatch.setattr(anthropic, "AnthropicBedrockMantle", FakeClient)
-
-    first = eb.generate_genai_answers(3, "fake-model", "us-east-1")
-    assert len(first) == 3
-    assert len(calls) == 1
-
-    second = eb.generate_genai_answers(3, "fake-model", "us-east-1")
-    assert second == first
-    assert len(calls) == 1  # served from the cache, no second API call
-
-
-def test_get_answers_uses_genai_only_beyond_curated_list(tmp_path, monkeypatch):
-    anthropic = pytest.importorskip("anthropic")
-    monkeypatch.setattr(eb, "GENAI_CACHE_PATH", str(tmp_path / "cache.json"))
-
-    class FakeMessages:
-        def create(self, model, max_tokens, messages):
-            return type("R", (), {"content": [type("B", (), {"type": "text", "text": "[]"})()]})()
-
-    class FakeClient:
-        def __init__(self, aws_region=None):
-            self.messages = FakeMessages()
-
-    monkeypatch.setattr(anthropic, "AnthropicBedrockMantle", FakeClient)
-
-    # 3 qubits needs only curated answers -- --genai should be a no-op here,
-    # i.e. it must not even try to instantiate the Bedrock client.
-    answers = eb.get_answers(3, use_genai=True)
-    assert answers == eb.CURATED_ANSWERS[:8]
 
 
 # --- shake: the quantum coin-flip -----------------------------------------

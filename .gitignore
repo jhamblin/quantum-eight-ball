@@ -5,4 +5,3 @@ venv/
 .env
 *.egg-info/
 .pytest_cache/
-genai_answers_cache.json

@@ -308,11 +308,16 @@ def build_grover_circuit(
     return circuit
 
 
-def shake(device, qubits: List[int]) -> str:
-    """Quantum coin-flip: uniform superposition + one measurement."""
+def build_shake_circuit(qubits: List[int]) -> Circuit:
     circuit = Circuit()
     for q in qubits:
         circuit.h(q)
+    return circuit
+
+
+def shake(device, qubits: List[int]) -> str:
+    """Quantum coin-flip: uniform superposition + one measurement."""
+    circuit = build_shake_circuit(qubits)
     result = device.run(circuit, shots=1).result()
     return next(iter(result.measurement_counts))
 
@@ -399,6 +404,7 @@ def main() -> None:
         f"\nShaking the ball ({args.qubits}-qubit coin-flip picks 1 of "
         f"{n_answers} hidden answers)..."
     )
+    print(build_shake_circuit(main_qubits))
     target_bits = shake(device, main_qubits)
     target_index = int(target_bits, 2)
     print(

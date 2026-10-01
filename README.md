@@ -469,6 +469,7 @@ amplified distribution, e.g.:
 🎱 You asked: "Will this project work?"
 
 Shaking the ball (3-qubit coin-flip picks 1 of 8 hidden answers)...
+[... shake circuit diagram: H on each of the 3 qubits ...]
 Hidden answer: 010 -> "You may rely on it" (kept secret until revealed below)
 
 Grover circuit (3 answer qubits = 3 total, 2 iteration(s)):

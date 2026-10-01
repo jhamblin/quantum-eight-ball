@@ -121,7 +121,7 @@ def wait_for_result(task):
     """
     print(f"Task ID: {task.id}")
     try:
-        return task.result()
+        result = task.result()
     except KeyboardInterrupt:
         print("\nInterrupted -- requesting cancellation on AWS...")
         try:
@@ -134,6 +134,18 @@ def wait_for_result(task):
         except Exception as e:
             print(f"Could not cancel: {e}")
         raise SystemExit(1)
+
+    if result is None:
+        # task.result() returns None (not an exception) on failure, after
+        # printing its own failure reason -- e.g. a real QPU's compiler can
+        # reject an accepted-gate-set circuit for being too large, which
+        # isn't something retrying the same circuit fixes.
+        raise SystemExit(
+            f"Task {task.id} did not complete successfully "
+            f"(state: {task.state()}). See the failure reason printed "
+            "above, or check the task in the Braket console."
+        )
+    return result
 
 
 def optimal_iterations(n_items: int, n_marked: int = 1) -> int:

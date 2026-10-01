@@ -215,6 +215,25 @@ def test_wait_for_result_returns_normally_without_interrupt():
     assert eb.wait_for_result(FakeTask()) == "the result"
 
 
+def test_wait_for_result_raises_clearly_on_failed_task():
+    """Regression test: task.result() returns None (not an exception) when
+    a task fails -- e.g. a real QPU's compiler rejecting a circuit -- and
+    the old code let that propagate into a confusing AttributeError
+    instead of a clear message."""
+
+    class FakeTask:
+        id = "fake-id"
+
+        def result(self):
+            return None
+
+        def state(self):
+            return "FAILED"
+
+    with pytest.raises(SystemExit, match="FAILED"):
+        eb.wait_for_result(FakeTask())
+
+
 # --- get_device ------------------------------------------------------------
 
 
